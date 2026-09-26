@@ -1,0 +1,16 @@
+title: New User Account Created
+id: SOC-1003
+description: >-
+  Detects creation of a new user account on the system. While user creation
+  is a normal admin task, it is also a primary persistence mechanism
+  (ATT&CK T1136.001). Alert should be triaged to confirm the new account is
+  authorized.
+logsource: auth.log
+mitre_id: T1136.001
+mitre_tactic: Persistence
+level: medium
+detection:
+  pattern: '(?i)new user|useradd|adduser'
+  fields:
+    action: account_created
+

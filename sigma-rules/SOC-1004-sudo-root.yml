@@ -1,0 +1,15 @@
+title: Sudo Privilege Escalation to Root
+id: SOC-1004
+description: >-
+  Detects successful sudo to root context. Useful baseline for tracking admin
+  activity; abnormal time-of-day or unusual source account warrants triage
+  (ATT&CK T1548.003 — Abuse Elevation Control Mechanism: Sudo and Sudo Caching).
+logsource: auth.log
+mitre_id: T1548.003
+mitre_tactic: Privilege Escalation
+level: low
+detection:
+  pattern: '(?i)(sudo:.*TTY|sudo.*root|session opened for user root)'
+  fields:
+    process: sudo
+

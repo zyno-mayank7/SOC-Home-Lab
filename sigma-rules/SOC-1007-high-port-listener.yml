@@ -1,0 +1,17 @@
+title: Suspicious Listening Port on High Range
+id: SOC-1007
+description: >-
+  Detects listening sockets on high-range ports (30000+) that are commonly
+  used by reverse shells and C2 beacons. Velociraptor's netstat hunt provides
+  the source data. Persistent high-port listeners warrant investigation unless
+  the process is known (e.g. node.js dev server on 3000).
+logsource: velociraptor
+mitre_id: T1571
+mitre_tactic: Command and Control
+level: medium
+detection:
+  pattern: '"Laddr.Port"\\s*:\\s*(3[0-9]{4}|[4-9][0-9]{4})'
+  fields:
+    indicator: high_port_listener
+
+

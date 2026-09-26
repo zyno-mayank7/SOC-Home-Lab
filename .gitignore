@@ -1,0 +1,52 @@
+# ─── Binaries & large files ─────────────────────────────────────────
+# Velociraptor binary is 82MB — too big for git, download separately
+bin/velociraptor
+bin/velociraptor.exe
+bin/velociraptor-v*
+
+# Atomic Red Team YAMLs are 228MB — too big, download separately
+atomics_yaml/
+atomics/
+
+# ─── Runtime state (regenerated on start) ──────────────────────────
+var/velociraptor-server/
+var/velociraptor.pid
+var/siem.pid
+var/tail_state.json
+
+# Runtime logs (regenerated)
+logs/*.log.*
+logs/frontend.out
+logs/siem-web.out
+logs/Velociraptor*.log*
+
+# ─── Local artifacts ──────────────────────────────────────────────
+# SQLite DB & hunt results are runtime data, keep them out of git
+data/siem.db
+data/siem.db-journal
+data/siem.db-wal
+data/siem.db-shm
+data/hunts/
+data/atomic_results.json
+logs/simulated_auth.log
+
+# ─── Python ──────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+*.egg-info/
+
+# ─── OS ──────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ─── IDE ─────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~

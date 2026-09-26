@@ -1,0 +1,16 @@
+title: Suspicious Encoded PowerShell Execution
+id: SOC-1001
+description: >-
+  Detects execution of PowerShell with -EncodedCommand or -e flag, a common
+  technique for obfuscated payload delivery (e.g. download cradles, encoded
+  reverse shells). This is the #1 detection for ATT&CK T1059.001.
+logsource: auth.log
+mitre_id: T1059.001
+mitre_tactic: Execution
+level: high
+detection:
+  pattern: '(?i)powershell.*(-e|-enc|-encodedcommand)\s+[A-Za-z0-9+/=]{20,}'
+  fields:
+    process: powershell
+    suspicious_flag: encodedcommand
+

@@ -1,0 +1,16 @@
+title: Credential Dumping via /etc/shadow Read
+id: SOC-1008
+description: >-
+  Detects attempts to read /etc/shadow — the privileged password hash file.
+  Attackers who reach root will often cat /etc/shadow to extract hashes for
+  offline cracking (ATT&CK T1003.008 — OS Credential Dumping: /etc/passwd
+  and /etc/shadow).
+logsource: auth.log
+mitre_id: T1003.008
+mitre_tactic: Credential Access
+level: high
+detection:
+  pattern: '(?i)/etc/shadow'
+  fields:
+    file: /etc/shadow
+

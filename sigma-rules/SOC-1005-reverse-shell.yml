@@ -1,0 +1,21 @@
+title: Suspicious Reverse Shell Connection
+id: SOC-1005
+description: >-
+  Detects reverse shell indicators from process listings — bash or sh with
+  network socket activity, or known reverse shell payload patterns like
+  /dev/tcp, nc -e, mknod backpipe. Velociraptor's process hunt captures
+  this from the running process table.
+logsource: velociraptor
+mitre_id: T1059.004
+mitre_tactic: Execution
+level: high
+detection:
+  pattern: '(\\/dev\\/tcp\\/|nc\\s+-[ela]|bash\\s+-i|/bin/sh.*-i|reverse.shell)'
+  fields:
+    process: bash
+    indicators:
+      - dev_tcp
+      - nc_exec
+      - interactive_shell
+
+

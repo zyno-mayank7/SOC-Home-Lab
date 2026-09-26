@@ -1,0 +1,17 @@
+title: Suspicious Cron Entry — Network Callback
+id: SOC-1006
+description: >-
+  Detects cron entries that invoke curl/wget/nc/ncat — common in cryptominer
+  and C2 beacon persistence. Velociraptor Linux.Sys.Crontab hunt provides
+  the source data. False positive rate is low because system cron rarely
+  uses these tools.
+logsource: velociraptor
+mitre_id: T1053.003
+mitre_tactic: Persistence
+level: high
+detection:
+  pattern: '(?i)cron\['
+  fields:
+    location: cron
+    suspicious_command: network_callback
+

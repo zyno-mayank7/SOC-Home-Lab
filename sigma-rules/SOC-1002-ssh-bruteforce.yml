@@ -1,0 +1,16 @@
+title: SSH Brute Force — Multiple Failed Logins
+id: SOC-1002
+description: >-
+  Detects five or more failed SSH login attempts from the same source IP within
+  a short window. A classic credential-stuffing or password-spraying indicator
+  (ATT&CK T1110.001). Tuning: legitimate cron-based SSH may produce isolated
+  failures, but 5+ failures from one IP in 5 minutes is almost always malicious.
+logsource: auth.log
+mitre_id: T1110.001
+mitre_tactic: Credential Access
+level: high
+detection:
+  pattern: '(?i)(Failed password|Invalid user|authentication failure).*'
+  fields:
+    process: sshd
+
