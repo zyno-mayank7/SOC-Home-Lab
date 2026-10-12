@@ -215,11 +215,11 @@ Frontend:
     expected_clients: 30000
 Datastore:
   implementation: FileBaseDataStore
-  location: /home/z/my-project/soc-lab/var/velociraptor-server
-  filestore_directory: /var/tmp/velociraptor/
+  location: ./var/velociraptor-server
+  filestore_directory: ./var/velociraptor-server/filestore
   compression: zlib
 Logging:
-  output_directory: /home/z/my-project/soc-lab/logs
+  output_directory: ./logs
   separate_logs_per_component: true
   debug:
     disabled: true

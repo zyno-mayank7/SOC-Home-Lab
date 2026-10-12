@@ -9,16 +9,12 @@ atomics_yaml/
 atomics/
 
 # ─── Runtime state (regenerated on start) ──────────────────────────
-var/velociraptor-server/
-var/velociraptor.pid
-var/siem.pid
-var/tail_state.json
+var/*
+!var/.gitkeep
 
 # Runtime logs (regenerated)
-logs/*.log.*
-logs/frontend.out
-logs/siem-web.out
-logs/Velociraptor*.log*
+logs/*
+!logs/.gitkeep
 
 # ─── Local artifacts ──────────────────────────────────────────────
 # SQLite DB & hunt results are runtime data, keep them out of git

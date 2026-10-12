@@ -25,12 +25,12 @@ import sqlite3
 import hashlib
 import threading
 import subprocess
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from flask import Flask, request, jsonify, render_template_string
 
 # ─── Paths ─────────────────────────────────────────────────────────────────
-LAB_ROOT = Path('/home/z/my-project/soc-lab')
+LAB_ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = LAB_ROOT / 'data' / 'siem.db'
 RULES_DIR = LAB_ROOT / 'sigma-rules'
 HUNTS_DIR = LAB_ROOT / 'data' / 'hunts'
@@ -89,6 +89,9 @@ def get_db():
 
 def init_db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    HUNTS_DIR.mkdir(parents=True, exist_ok=True)
+    LOG_TAIL_STATE.parent.mkdir(parents=True, exist_ok=True)
+    (LAB_ROOT / 'logs').mkdir(parents=True, exist_ok=True)
     conn = get_db()
     conn.executescript(SCHEMA)
     conn.commit()
@@ -156,6 +159,21 @@ LOG_SOURCES = [
     {
         'name': 'simulated-auth',
         'path': str(LAB_ROOT / 'logs' / 'simulated_auth.log'),
+        'type': 'syslog_auth',
+    },
+    {
+        'name': 'network-log',
+        'path': str(LAB_ROOT / 'logs' / 'network.log'),
+        'type': 'syslog_auth',
+    },
+    {
+        'name': 'windows-events',
+        'path': str(LAB_ROOT / 'logs' / 'windows_events.log'),
+        'type': 'syslog_auth',
+    },
+    {
+        'name': 'vm-syslog',
+        'path': str(LAB_ROOT / 'logs' / 'vm_syslog.log'),
         'type': 'syslog_auth',
     },
     {
@@ -239,6 +257,7 @@ def parse_velociraptor_ports(json_text):
         fields = {
             'local_ip': r.get('Laddr.IP', ''),
             'local_port': str(r.get('Laddr.Port', '')),
+            'Laddr.Port': str(r.get('Laddr.Port', '')),
             'pid': str(r.get('Pid', '')),
         }
         events.append((ts, 'velociraptor', json.dumps(fields), fields))
@@ -296,6 +315,7 @@ def ingest_file(source):
             )
             new_count += 1
     state[state_key] = new_offset
+    LOG_TAIL_STATE.parent.mkdir(parents=True, exist_ok=True)
     LOG_TAIL_STATE.write_text(json.dumps(state))
     conn.commit()
     conn.close()
@@ -379,6 +399,161 @@ def run_detection():
     conn.close()
     print(f'[+] Detection run complete — {len(alerts)} new alerts')
     return len(alerts)
+
+
+# ─── Log Clearing & Retention ──────────────────────────────────────────────
+def parse_flexible_datetime(val, is_end=False):
+    """Parse various datetime inputs: ISO string, YYYY-MM-DD HH:MM:SS, relative offsets (15m, 1h, 24h, 7d)."""
+    if not val:
+        return None
+    if isinstance(val, datetime):
+        return val
+    val = str(val).strip()
+    m = re.match(r'^(\d+)\s*([mhd])$', val.lower())
+    if m:
+        num, unit = int(m.group(1)), m.group(2)
+        delta = timedelta(minutes=num) if unit == 'm' else (timedelta(hours=num) if unit == 'h' else timedelta(days=num))
+        return datetime.now() - delta if not is_end else datetime.now()
+
+    formats = [
+        '%Y-%m-%dT%H:%M:%S',
+        '%Y-%m-%dT%H:%M',
+        '%Y-%m-%d %H:%M:%S',
+        '%Y-%m-%d %H:%M',
+        '%Y-%m-%d',
+        '%H:%M:%S',
+        '%H:%M',
+        '%b %d %H:%M:%S',
+    ]
+    for fmt in formats:
+        try:
+            dt = datetime.strptime(val, fmt)
+            today = datetime.now()
+            if fmt == '%Y-%m-%d':
+                dt = dt.replace(hour=23, minute=59, second=59) if is_end else dt.replace(hour=0, minute=0, second=0)
+            elif fmt in ('%H:%M:%S', '%H:%M'):
+                dt = dt.replace(year=today.year, month=today.month, day=today.day)
+            elif fmt == '%b %d %H:%M:%S':
+                dt = dt.replace(year=today.year)
+            return dt
+        except ValueError:
+            pass
+    return None
+
+
+def purge_disk_logs(start_dt, end_dt):
+    """Filter lines out of on-disk log files that fall between start_dt and end_dt."""
+    purged_files = []
+    log_files = [
+        LAB_ROOT / 'logs' / 'simulated_auth.log',
+        LAB_ROOT / 'logs' / 'network.log',
+        LAB_ROOT / 'logs' / 'windows_events.log',
+        LAB_ROOT / 'logs' / 'vm_syslog.log',
+    ]
+    now_year = datetime.now().year
+    for lf in log_files:
+        if not lf.exists():
+            continue
+        try:
+            lines = lf.read_text(encoding='utf-8', errors='replace').splitlines()
+            kept_lines = []
+            removed_count = 0
+            for line in lines:
+                if not line.strip():
+                    continue
+                m = re.match(r'^(\w+\s+\d+\s+\d+:\d+:\d+)', line)
+                if m:
+                    try:
+                        line_dt = datetime.strptime(f"{now_year} {m.group(1)}", "%Y %b %d %H:%M:%S")
+                        if start_dt and line_dt < start_dt:
+                            kept_lines.append(line)
+                            continue
+                        if end_dt and line_dt > end_dt:
+                            kept_lines.append(line)
+                            continue
+                        removed_count += 1
+                        continue
+                    except ValueError:
+                        pass
+                kept_lines.append(line)
+            lf.write_text('\n'.join(kept_lines) + ('\n' if kept_lines else ''), encoding='utf-8')
+            purged_files.append({'file': lf.name, 'removed_lines': removed_count})
+        except Exception as e:
+            print(f"[!] Error purging {lf}: {e}")
+
+    if LOG_TAIL_STATE.exists():
+        try:
+            LOG_TAIL_STATE.unlink()
+        except Exception:
+            pass
+    return purged_files
+
+
+def clear_logs_range(start_val=None, end_val=None, purge_disk=False):
+    """
+    Clear events and corresponding alerts between start_val and end_val.
+    Also optionally removes matching lines from on-disk log files.
+    """
+    start_dt = parse_flexible_datetime(start_val, is_end=False) if start_val else None
+    end_dt = parse_flexible_datetime(end_val, is_end=True) if end_val else None
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    conditions = []
+    params = []
+
+    if start_dt:
+        start_iso = start_dt.strftime('%Y-%m-%dT%H:%M:%S')
+        conditions.append("(ts >= ? OR ingested_at >= ?)")
+        params.extend([start_iso, start_iso])
+
+    if end_dt:
+        end_iso = end_dt.strftime('%Y-%m-%dT%H:%M:%S')
+        conditions.append("(ts <= ? OR ingested_at <= ?)")
+        params.extend([end_iso, end_iso])
+
+    where_clause = " AND ".join(conditions) if conditions else "1=1"
+
+    cur.execute(f"SELECT COUNT(*) FROM events WHERE {where_clause}", params)
+    deleted_events = cur.fetchone()[0]
+
+    cur.execute(f"""
+        DELETE FROM alerts 
+        WHERE event_id IN (SELECT id FROM events WHERE {where_clause})
+    """, params)
+    deleted_alerts = cur.rowcount
+
+    if conditions:
+        alert_cond = []
+        alert_params = []
+        if start_dt:
+            alert_cond.append("created_at >= ?")
+            alert_params.append(start_iso)
+        if end_dt:
+            alert_cond.append("created_at <= ?")
+            alert_params.append(end_iso)
+        cur.execute(f"DELETE FROM alerts WHERE {' AND '.join(alert_cond)}", alert_params)
+        deleted_alerts += cur.rowcount
+
+    cur.execute(f"DELETE FROM events WHERE {where_clause}", params)
+
+    conn.commit()
+    conn.close()
+
+    disk_info = []
+    if purge_disk:
+        disk_info = purge_disk_logs(start_dt, end_dt)
+
+    return {
+        'status': 'ok',
+        'deleted_events': deleted_events,
+        'deleted_alerts': deleted_alerts,
+        'start': start_dt.isoformat() if start_dt else None,
+        'end': end_dt.isoformat() if end_dt else None,
+        'disk_purged': purge_disk,
+        'disk_details': disk_info,
+    }
 
 
 # ─── Web dashboard ─────────────────────────────────────────────────────────
@@ -513,6 +688,53 @@ DASHBOARD_HTML = """
     font-family: 'JetBrains Mono', monospace;
     font-size: 12px;
   }
+  .time-input {
+    background: #1c1b18;
+    border: 1px solid #453f2e;
+    color: #e9e9e7;
+    padding: 8px 12px;
+    border-radius: 4px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+  }
+  .time-input:focus {
+    outline: none;
+    border-color: #debe60;
+  }
+  .btn-preset {
+    background: #2d2a23;
+    border: 1px solid #453f2e;
+    color: #debe60;
+    padding: 6px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 11px;
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 600;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .btn-preset:hover {
+    background: #3d382c;
+    border-color: #debe60;
+  }
+  .btn-action {
+    background: #674f43;
+    color: #f4f3f3;
+    border: 1px solid #8c6d5b;
+    padding: 9px 18px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: 700;
+    font-size: 12px;
+    letter-spacing: 0.5px;
+    transition: background 0.2s, transform 0.1s;
+  }
+  .btn-action:hover {
+    background: #855b4b;
+  }
+  .btn-action:active {
+    transform: scale(0.98);
+  }
 </style>
 </head>
 <body>
@@ -590,9 +812,106 @@ DASHBOARD_HTML = """
     {% endfor %}
   </table>
 
-  <div class="footer">
-    SOC Home Lab · Mini SIEM v1.0 · /home/z/my-project/soc-lab · {{ now }}
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-top:28px;">
+    <div class="section-title" style="margin:0; border:none;">Live Ingested Log Explorer (Real Telemetry Stream)</div>
+    <input type="text" id="logFilter" placeholder="Filter logs (e.g. powershell, netwatch, port)..." 
+           onkeyup="filterLogs()" 
+           style="background:#1c1b18; border:1px solid #453f2e; color:#e9e9e7; padding:6px 12px; border-radius:4px; font-family:'JetBrains Mono',monospace; font-size:12px; width:340px;">
   </div>
+  <table id="eventsTable" style="margin-top:12px;">
+    <tr>
+      <th style="width:160px;">Timestamp</th>
+      <th style="width:170px;">Source</th>
+      <th>Raw Log Message</th>
+    </tr>
+    {% for ev in recent_events %}
+    <tr class="log-row">
+      <td><code>{{ ev.ts[:19] }}</code></td>
+      <td><span class="mitre-tag" style="color:#6bb483;">{{ ev.source }}</span></td>
+      <td style="font-family:'JetBrains Mono',monospace; font-size:12px; word-break:break-all;">{{ ev.raw }}</td>
+    </tr>
+    {% endfor %}
+    {% if not recent_events %}
+    <tr><td colspan="3" style="text-align:center;color:#8c8582;padding:24px;">No events ingested yet. Run a collection script or ingest logs.</td></tr>
+    {% endif %}
+  </table>
+
+  <div class="footer">
+    SOC Home Lab · Mini SIEM v1.0 · {{ lab_root }} · {{ now }}
+  </div>
+
+  <script>
+    function filterLogs() {
+      const input = document.getElementById('logFilter').value.toLowerCase();
+      const rows = document.querySelectorAll('#eventsTable .log-row');
+      rows.forEach(r => {
+        const text = r.textContent.toLowerCase();
+        r.style.display = text.includes(input) ? '' : 'none';
+      });
+    }
+
+    function toLocalISOString(d) {
+      const pad = n => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+
+    function setPreset(preset) {
+      const now = new Date();
+      const endInput = document.getElementById('clearEnd');
+      const startInput = document.getElementById('clearStart');
+      endInput.value = toLocalISOString(now);
+
+      if (preset === '15m') {
+        startInput.value = toLocalISOString(new Date(now.getTime() - 15 * 60 * 1000));
+      } else if (preset === '1h') {
+        startInput.value = toLocalISOString(new Date(now.getTime() - 60 * 60 * 1000));
+      } else if (preset === '24h') {
+        startInput.value = toLocalISOString(new Date(now.getTime() - 24 * 60 * 60 * 1000));
+      } else if (preset === 'all') {
+        startInput.value = '1970-01-01T00:00';
+        endInput.value = toLocalISOString(new Date(now.getTime() + 24 * 60 * 60 * 1000));
+      }
+    }
+
+    async function submitClearLogs() {
+      const start = document.getElementById('clearStart').value;
+      const end = document.getElementById('clearEnd').value;
+      const purgeDisk = document.getElementById('purgeDisk').checked;
+      const resultDiv = document.getElementById('clearResult');
+
+      if (!start && !end) {
+        alert('Please specify at least a Start or End time, or pick a preset.');
+        return;
+      }
+
+      const confirmMsg = `Are you sure you want to clear logs from:\\nStart: ${start || 'Beginning'}\\nEnd:   ${end || 'Now'}\\nPurge disk files (.log): ${purgeDisk ? 'YES' : 'NO'}`;
+      if (!confirm(confirmMsg)) return;
+
+      resultDiv.style.display = 'block';
+      resultDiv.style.color = '#debe60';
+      resultDiv.textContent = 'Purging logs...';
+
+      try {
+        const res = await fetch('/api/clear-logs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ start, end, purge_disk: purgeDisk })
+        });
+        const data = await res.json();
+        if (data.status === 'ok') {
+          resultDiv.style.color = '#6bb483';
+          resultDiv.textContent = `[OK] Purged ${data.deleted_events} events and ${data.deleted_alerts} alerts between ${data.start || 'Beginning'} and ${data.end || 'Now'}${data.disk_purged ? ' (Disk logs purged)' : ''}. Refreshing...`;
+          setTimeout(() => window.location.reload(), 1500);
+        } else {
+          resultDiv.style.color = '#c88882';
+          resultDiv.textContent = `[!] Error: ${data.error || 'Failed to clear logs'}`;
+        }
+      } catch (err) {
+        resultDiv.style.color = '#c88882';
+        resultDiv.textContent = `[!] Network/server error: ${err.message}`;
+      }
+    }
+  </script>
 </body>
 </html>
 """
@@ -654,6 +973,22 @@ def get_dashboard_data():
             'alert_count': row[5],
             'status': status,
         })
+    # Recent ingested events (up to 60 latest)
+    cur.execute("""
+        SELECT id, ts, source, raw
+        FROM events
+        ORDER BY id DESC
+        LIMIT 60
+    """)
+    recent_events = []
+    for row in cur.fetchall():
+        recent_events.append({
+            'id': row[0],
+            'ts': row[1],
+            'source': row[2],
+            'raw': row[3],
+        })
+
     conn.close()
     return {
         'total_events': total_events,
@@ -662,6 +997,8 @@ def get_dashboard_data():
         'rules_count': rules_count,
         'alerts': alerts,
         'coverage': coverage,
+        'recent_events': recent_events,
+        'lab_root': str(LAB_ROOT),
         'now': datetime.now().isoformat(timespec='seconds'),
     }
 
@@ -698,6 +1035,20 @@ def api_alerts():
     return jsonify(rows)
 
 
+@app.route('/api/events')
+def api_events():
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT id, ts, source, raw, ingested_at
+        FROM events
+        ORDER BY id DESC LIMIT 100
+    """)
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return jsonify(rows)
+
+
 @app.route('/api/rules')
 def api_rules():
     conn = get_db()
@@ -711,6 +1062,24 @@ def api_rules():
 @app.route('/api/coverage')
 def api_coverage():
     return jsonify(get_dashboard_data()['coverage'])
+
+
+@app.route('/api/clear-logs', methods=['GET', 'POST', 'DELETE'])
+def api_clear_logs():
+    data = {}
+    if request.is_json:
+        data = request.get_json() or {}
+    elif request.form:
+        data = request.form.to_dict()
+    else:
+        data = request.args.to_dict()
+
+    start = data.get('start') or data.get('from')
+    end = data.get('end') or data.get('to')
+    purge_disk = str(data.get('purge_disk', '')).lower() in ('true', '1', 'yes')
+
+    res = clear_logs_range(start, end, purge_disk=purge_disk)
+    return jsonify(res)
 
 
 # ─── CLI ────────────────────────────────────────────────────────────────────
@@ -759,6 +1128,75 @@ def cmd_run_atomic(mitre_id):
     print(json.dumps(results, indent=2))
 
 
+def cmd_clear(args):
+    """CLI to clear logs from a specific time to specific time."""
+    start = None
+    end = None
+    purge_disk = False
+
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg in ('--start', '--from'):
+            if i + 1 < len(args):
+                start = args[i + 1]
+                i += 1
+        elif arg in ('--end', '--to'):
+            if i + 1 < len(args):
+                end = args[i + 1]
+                i += 1
+        elif arg == '--last':
+            if i + 1 < len(args):
+                start = args[i + 1]
+                end = 'now'
+                i += 1
+        elif arg == '--all':
+            start = '1970-01-01'
+            end = '2099-01-01'
+        elif arg in ('--purge-disk', '-d'):
+            purge_disk = True
+        i += 1
+
+    if not start and not end:
+        print("Usage: python mini-siem.py clear [--start <TIME>] [--end <TIME>] [--last <OFFSET>] [--all] [--purge-disk]")
+        print("Examples:")
+        print("  python mini-siem.py clear --start '2026-09-26 16:00:00' --end '2026-09-26 16:30:00'")
+        print("  python mini-siem.py clear --last 1h --purge-disk")
+        print("  python mini-siem.py clear --all --purge-disk")
+        return
+
+    res = clear_logs_range(start, end, purge_disk=purge_disk)
+    print(f"[+] Log purge complete:")
+    print(f"    Deleted Events: {res['deleted_events']}")
+    print(f"    Deleted Alerts: {res['deleted_alerts']}")
+    print(f"    Time Range:     {res['start'] or 'Beginning'} -> {res['end'] or 'Now'}")
+    if purge_disk:
+        print(f"    Disk Purged:    Yes")
+        for d in res.get('disk_details', []):
+            print(f"      - {d['file']}: removed {d['removed_lines']} lines")
+    print(f"[+] Current state:")
+    cmd_status()
+
+
+def cmd_events(args):
+    """Print latest ingested events in terminal."""
+    limit = 25
+    if args and args[0].isdigit():
+        limit = int(args[0])
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT id, ts, source, raw
+        FROM events
+        ORDER BY id DESC LIMIT ?
+    """, (limit,))
+    rows = cur.fetchall()
+    conn.close()
+    print(f"=== Last {len(rows)} Ingested SIEM Events ===")
+    for r in reversed(rows):
+        print(f"[{r[1][:19]}] [{r[2]:18}] {r[3][:120]}")
+
+
 if __name__ == '__main__':
     if len(sys.argv) < 2:
         print(__doc__)
@@ -772,6 +1210,10 @@ if __name__ == '__main__':
         cmd_serve()
     elif cmd == 'status':
         cmd_status()
+    elif cmd == 'clear':
+        cmd_clear(sys.argv[2:])
+    elif cmd in ('logs', 'events'):
+        cmd_events(sys.argv[2:])
     elif cmd == 'atomic':
         if len(sys.argv) < 3:
             print('Usage: atomic <MITRE_ID>')

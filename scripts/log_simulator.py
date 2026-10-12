@@ -22,7 +22,8 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
-LOG_PATH = Path('/home/z/my-project/soc-lab/logs/simulated_auth.log')
+LAB_ROOT = Path(__file__).resolve().parent.parent
+LOG_PATH = LAB_ROOT / 'logs' / 'simulated_auth.log'
 LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 # Realistic source IPs for the simulation

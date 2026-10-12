@@ -1,0 +1,14 @@
+title: Windows User Account Created (Event 4720)
+id: SOC-1011
+description: >-
+  Detects Windows Security Event ID 4720 indicating a new local or domain user
+  account was created on the system (persistence indicator).
+logsource: windows_events.log
+mitre_id: T1136.001
+mitre_tactic: Persistence
+level: high
+detection:
+  pattern: '(?i)(Microsoft-Windows-Security-Auditing\[4720\]|A user account was created)'
+  fields:
+    event_id: '4720'
+    channel: Security

@@ -1,0 +1,13 @@
+title: Suspicious Outbound Connection to C2 Port
+id: SOC-1009
+description: >-
+  Detects network connections to common command-and-control, reverse shell,
+  and backdoor listening ports (4444, 1337, 8888, 9001, 5555, 6666, 31337).
+logsource: network.log
+mitre_id: T1571
+mitre_tactic: Command and Control
+level: high
+detection:
+  pattern: 'remote=.*:(4444|1337|9001|5555|6666|31337)\b'
+  fields:
+    indicator: suspicious_c2_port

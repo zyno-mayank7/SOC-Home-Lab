@@ -1,0 +1,14 @@
+title: Windows Account Failed to Log On (Event 4625)
+id: SOC-1010
+description: >-
+  Detects Windows Security Event ID 4625 indicating an authentication failure,
+  which may be a sign of password spraying or brute force activity.
+logsource: windows_events.log
+mitre_id: T1110.001
+mitre_tactic: Credential Access
+level: medium
+detection:
+  pattern: '(?i)(Microsoft-Windows-Security-Auditing\[4625\]|An account failed to log on)'
+  fields:
+    event_id: '4625'
+    channel: Security
